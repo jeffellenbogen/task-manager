@@ -170,7 +170,11 @@
     .task[data-priority="medium"]::before { background: var(--warn); }
     .task[data-priority="low"]::before    { background: var(--success); }
 
-    .task.done { opacity: 0.5; }
+    /* Done styling: dim content, not the whole card (keeps card opaque over swipe-bg) */
+    .task.done .task-body { opacity: 0.55; }
+    .task.done .drag-handle,
+    .task.done .edit-btn,
+    .task.done .del-btn { opacity: 0.35; }
     .task.done .task-title { text-decoration: line-through; color: var(--muted); }
     .task.trashed { opacity: 0.55; }
 
@@ -238,7 +242,7 @@
     .tag-rem  { background: color-mix(in srgb,#818cf8 18%,transparent); color: #818cf8; }
 
     /* ── Card buttons ── */
-    .del-btn, .restore-btn {
+    .del-btn, .edit-btn, .restore-btn {
       background: transparent;
       border: none;
       cursor: pointer;
@@ -249,8 +253,10 @@
       -webkit-tap-highlight-color: transparent;
       transition: color 0.15s;
     }
-    .del-btn { color: var(--muted); }
+    .del-btn   { color: var(--muted); }
     .del-btn:active { color: var(--danger); }
+    .edit-btn  { color: var(--muted); font-size: 0.9rem; }
+    .edit-btn:active { color: var(--accent); }
     .restore-btn { color: var(--success); font-size: 1.1rem; }
 
     /* ── Drag placeholder ── */
@@ -386,10 +392,10 @@
   <button class="fab" id="fab" aria-label="Add task">+</button>
 </div>
 
-<!-- Add Task Sheet -->
+<!-- Add / Edit Task Sheet -->
 <div class="overlay" id="overlay">
   <div class="sheet">
-    <h2>New Task</h2>
+    <h2 id="sheet-title">New Task</h2>
     <div class="field">
       <label>Title</label>
       <input type="text" id="inp-title" placeholder="What needs to be done?" maxlength="120" />
@@ -445,7 +451,9 @@
   let tasks = JSON.parse(localStorage.getItem('tasks') || '[]');
   let trash = JSON.parse(localStorage.getItem('trash') || '[]');
   let filter = 'all';
-  const remTimers = {};
+  let editingId = null;
+  const pendingDone = new Set(); // IDs of tasks just marked done, animating out
+  const firedReminders = new Set(JSON.parse(localStorage.getItem('firedReminders') || '[]'));
 
   const save = () => {
     localStorage.setItem('tasks', JSON.stringify(tasks));
@@ -480,20 +488,43 @@
     return (await Notification.requestPermission()) === 'granted';
   }
 
-  function scheduleReminders() {
-    Object.values(remTimers).forEach(clearTimeout);
-    Object.keys(remTimers).forEach(k => delete remTimers[k]);
+  function showNotification(task) {
+    // Use SW-backed showNotification so it works even when tab is backgrounded
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready
+        .then(reg => reg.showNotification('Task Reminder', {
+          body: task.title,
+          icon: './icon-192.png',
+          tag: task.id,
+        }))
+        .catch(() => new Notification('Task Reminder', { body: task.title, icon: './icon-192.png', tag: task.id }));
+    } else {
+      new Notification('Task Reminder', { body: task.title, icon: './icon-192.png', tag: task.id });
+    }
+  }
+
+  function checkReminders(missedWindowMs) {
+    if (Notification.permission !== 'granted') return;
+    const now = Date.now();
     tasks.filter(t => !t.done).forEach(task => {
       const ms = reminderMs(task);
       if (!ms) return;
-      const delay = ms - Date.now();
-      if (delay <= 0 || delay > 7 * 864e5) return;
-      remTimers[task.id] = setTimeout(() => {
-        if (Notification.permission === 'granted') {
-          new Notification('Task Reminder', { body: task.title, icon: './icon-192.png', tag: task.id });
-        }
-      }, delay);
+      const remKey = task.id + ':' + ms;
+      if (firedReminders.has(remKey)) return;
+      if (ms <= now && now - ms < missedWindowMs) {
+        firedReminders.add(remKey);
+        localStorage.setItem('firedReminders', JSON.stringify([...firedReminders]));
+        showNotification(task);
+      }
     });
+  }
+
+  function scheduleReminders() {
+    if (window._remInterval) clearInterval(window._remInterval);
+    // On load: catch any reminder missed in the last 10 minutes
+    checkReminders(10 * 60 * 1000);
+    // Poll every 30 seconds for upcoming reminders (fires within ~30s of due time)
+    window._remInterval = setInterval(() => checkReminders(35000), 30000);
   }
 
   // ── Render ─────────────────────────────────────────────────────────
@@ -527,12 +558,13 @@
     }
 
     const vis = tasks.filter(t => {
-      if (filter === 'active') return !t.done;
       if (filter === 'done')   return t.done;
+      if (filter === 'active') return !t.done;
       if (filter === 'high')   return t.priority === 'high'   && !t.done;
       if (filter === 'medium') return t.priority === 'medium' && !t.done;
       if (filter === 'low')    return t.priority === 'low'    && !t.done;
-      return true;
+      // 'all': active tasks + ones just marked done (still animating out)
+      return !t.done || pendingDone.has(t.id);
     });
 
     if (!vis.length) {
@@ -548,6 +580,9 @@
         : '';
       const remTag = t.reminder && t.reminder !== 'none' ? `<span class="tag tag-rem">🔔</span>` : '';
       const dragBtn = showDrag ? `<button class="drag-handle" data-id="${t.id}" aria-label="Reorder">⋮⋮</button>` : '';
+      const editBtn = !t.done
+        ? `<button class="edit-btn" onclick="openEditSheet('${t.id}')" aria-label="Edit">✎</button>`
+        : '';
       return `
         <div class="task-row" data-id="${t.id}">
           <div class="swipe-bg">🗑 Delete</div>
@@ -562,6 +597,7 @@
                 ${dueTag}${remTag}
               </div>
             </div>
+            ${editBtn}
             <button class="del-btn" onclick="softDelete('${t.id}')" aria-label="Delete">✕</button>
           </div>
         </div>`;
@@ -569,7 +605,6 @@
 
     list.querySelectorAll('.task-row[data-id]').forEach(row => initSwipe(row));
     if (showDrag) list.querySelectorAll('.drag-handle').forEach(h => initDrag(h));
-    scheduleReminders();
   }
 
   // ── Swipe to delete ────────────────────────────────────────────────
@@ -578,7 +613,7 @@
     let sx = 0, sy = 0, cx = null, dir = null, ready = false;
 
     card.addEventListener('touchstart', e => {
-      if (e.target.closest('.check-btn,.del-btn,.drag-handle,.restore-btn')) return;
+      if (e.target.closest('.check-btn,.del-btn,.edit-btn,.drag-handle,.restore-btn')) return;
       sx = e.touches[0].clientX;
       sy = e.touches[0].clientY;
       cx = null; dir = null; ready = true;
@@ -691,7 +726,22 @@
   // ── Actions ────────────────────────────────────────────────────────
   function toggle(id) {
     const t = tasks.find(t => t.id === id);
-    if (t) { t.done = !t.done; save(); render(); }
+    if (!t) return;
+    if (!t.done) {
+      t.done = true;
+      pendingDone.add(id); // must be added before render() so filter sees it
+      save();
+      render();
+      setTimeout(() => {
+        pendingDone.delete(id);
+        render();
+      }, 3000);
+    } else {
+      t.done = false;
+      pendingDone.delete(id);
+      save();
+      render();
+    }
   }
 
   function softDelete(id) {
@@ -719,6 +769,9 @@
 
   // ── Sheet ──────────────────────────────────────────────────────────
   function openSheet() {
+    editingId = null;
+    document.getElementById('sheet-title').textContent = 'New Task';
+    document.getElementById('btn-add').textContent = 'Add Task';
     document.getElementById('inp-title').value = '';
     document.getElementById('inp-priority').value = 'medium';
     document.getElementById('inp-cat').value = 'Personal';
@@ -729,7 +782,26 @@
     setTimeout(() => document.getElementById('inp-title').focus(), 300);
   }
 
-  function closeSheet() { document.getElementById('overlay').classList.remove('open'); }
+  function openEditSheet(id) {
+    const t = tasks.find(t => t.id === id);
+    if (!t) return;
+    editingId = id;
+    document.getElementById('sheet-title').textContent = 'Edit Task';
+    document.getElementById('btn-add').textContent = 'Save Changes';
+    document.getElementById('inp-title').value = t.title;
+    document.getElementById('inp-priority').value = t.priority;
+    document.getElementById('inp-cat').value = t.cat;
+    document.getElementById('inp-due').value = t.due || '';
+    document.getElementById('inp-time').value = t.dueTime || '';
+    document.getElementById('inp-reminder').value = t.reminder || 'none';
+    document.getElementById('overlay').classList.add('open');
+    setTimeout(() => document.getElementById('inp-title').focus(), 300);
+  }
+
+  function closeSheet() {
+    editingId = null;
+    document.getElementById('overlay').classList.remove('open');
+  }
 
   async function addTask() {
     const title = document.getElementById('inp-title').value.trim();
@@ -738,17 +810,30 @@
     if (reminder !== 'none' && !(await askNotif())) {
       document.getElementById('inp-reminder').value = 'none';
     }
-    tasks.unshift({
-      id: Date.now().toString(36) + Math.random().toString(36).slice(2),
-      title,
-      priority: document.getElementById('inp-priority').value,
-      cat:      document.getElementById('inp-cat').value,
-      due:      document.getElementById('inp-due').value  || null,
-      dueTime:  document.getElementById('inp-time').value || null,
-      reminder: document.getElementById('inp-reminder').value,
-      done: false,
-      created: Date.now(),
-    });
+
+    if (editingId) {
+      const t = tasks.find(t => t.id === editingId);
+      if (t) {
+        t.title    = title;
+        t.priority = document.getElementById('inp-priority').value;
+        t.cat      = document.getElementById('inp-cat').value;
+        t.due      = document.getElementById('inp-due').value  || null;
+        t.dueTime  = document.getElementById('inp-time').value || null;
+        t.reminder = document.getElementById('inp-reminder').value;
+      }
+    } else {
+      tasks.unshift({
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+        title,
+        priority: document.getElementById('inp-priority').value,
+        cat:      document.getElementById('inp-cat').value,
+        due:      document.getElementById('inp-due').value  || null,
+        dueTime:  document.getElementById('inp-time').value || null,
+        reminder: document.getElementById('inp-reminder').value,
+        done: false,
+        created: Date.now(),
+      });
+    }
     save(); render(); closeSheet();
   }
 
@@ -770,6 +855,7 @@
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
   render();
+  scheduleReminders();
 </script>
 </body>
 </html>
