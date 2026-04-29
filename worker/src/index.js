@@ -1,37 +1,65 @@
-/**
- * Welcome to Cloudflare Workers!
- *
- * This is a template for a Scheduled Worker: a Worker that can run on a
- * configurable interval:
- * https://developers.cloudflare.com/workers/platform/triggers/cron-triggers/
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Run `curl "http://localhost:8787/__scheduled?cron=*+*+*+*+*"` to see your worker in action
- * - Run `npm run deploy` to publish your worker
- *
- * Learn more at https://developers.cloudflare.com/workers/
- */
+import { sendWebPush } from './push.js';
+
+// Allow requests from GitHub Pages and local dev
+const ALLOWED_ORIGINS = [
+  'https://jeffellenbogen.github.io',
+  'http://localhost:8080',
+  'http://127.0.0.1:8080',
+];
+
+function corsHeaders(origin) {
+  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  return {
+    'Access-Control-Allow-Origin': allowed,
+    'Access-Control-Allow-Methods': 'POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+}
+
+async function handleRequest(request, env) {
+  const origin = request.headers.get('Origin') || '';
+  const { pathname } = new URL(request.url);
+
+  // CORS preflight
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders(origin) });
+  }
+
+  // POST /subscribe — store or update a reminder in KV
+  if (request.method === 'POST' && pathname === '/subscribe') {
+    const { subscription, taskId, taskTitle, reminderMs } = await request.json();
+
+    if (!subscription?.endpoint || !taskId || !reminderMs) {
+      return new Response('Missing required fields', {
+        status: 400,
+        headers: corsHeaders(origin),
+      });
+    }
+
+    const value = JSON.stringify({ subscription, taskTitle, reminderMs });
+    await env.REMINDERS.put(`reminder:${taskId}`, value);
+
+    return new Response('OK', { status: 200, headers: corsHeaders(origin) });
+  }
+
+  // DELETE /reminder — remove a reminder from KV
+  if (request.method === 'DELETE' && pathname === '/reminder') {
+    const { taskId } = await request.json();
+    if (!taskId) {
+      return new Response('Missing taskId', { status: 400, headers: corsHeaders(origin) });
+    }
+    await env.REMINDERS.delete(`reminder:${taskId}`);
+    return new Response('OK', { status: 200, headers: corsHeaders(origin) });
+  }
+
+  return new Response('Not Found', { status: 404, headers: corsHeaders(origin) });
+}
+
+async function handleScheduled(env) {
+  // Implemented in Task 7
+}
 
 export default {
-	async fetch(req) {
-		const url = new URL(req.url)
-		url.pathname = "/__scheduled";
-		url.searchParams.append("cron", "* * * * *");
-		return new Response(`To test the scheduled handler, ensure you have used the "--test-scheduled" then try running "curl ${url.href}".`);
-	},
-
-	// The scheduled handler is invoked at the interval set in our wrangler.jsonc's
-	// [[triggers]] configuration.
-	async scheduled(event, env, ctx) {
-		// A Cron Trigger can make requests to other endpoints on the Internet,
-		// publish to a Queue, query a D1 Database, and much more.
-		//
-		// We'll keep it simple and make an API call to a Cloudflare API:
-		let resp = await fetch('https://api.cloudflare.com/client/v4/ips');
-		let wasSuccessful = resp.ok ? 'success' : 'fail';
-
-		// You could store this result in KV, write to a D1 Database, or publish to a Queue.
-		// In this template, we'll just log the result:
-		console.log(`trigger fired at ${event.cron}: ${wasSuccessful}`);
-	},
+  fetch: handleRequest,
+  scheduled: (event, env) => handleScheduled(env),
 };
