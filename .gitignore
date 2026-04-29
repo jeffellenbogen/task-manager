@@ -1,0 +1,9 @@
+# Cloudflare Worker local secrets — defense in depth
+# (worker/.gitignore also excludes these inside the worker dir)
+.dev.vars
+.dev.vars.*
+worker/.dev.vars
+.wrangler/
+
+# Editor / OS detritus
+.DS_Store
