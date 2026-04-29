@@ -56,7 +56,21 @@ async function handleRequest(request, env) {
 }
 
 async function handleScheduled(env) {
-  // Implemented in Task 7
+  const now = Date.now();
+  const { keys } = await env.REMINDERS.list({ prefix: 'reminder:' });
+
+  await Promise.all(keys.map(async ({ name }) => {
+    const raw = await env.REMINDERS.get(name);
+    if (!raw) return;
+
+    const { subscription, taskTitle, reminderMs } = JSON.parse(raw);
+
+    if (reminderMs > now) return; // not yet due
+
+    // Due: send push and delete (delete even if push fails to avoid repeat fires)
+    await env.REMINDERS.delete(name);
+    await sendWebPush(subscription, 'Task Reminder', taskTitle, env);
+  }));
 }
 
 export default {
