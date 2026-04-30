@@ -1,4 +1,4 @@
-const CACHE = 'taskmanager-v6';
+const CACHE = 'taskmanager-v7';
 const ASSETS = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', e => {
