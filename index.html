@@ -918,8 +918,13 @@
     const title = document.getElementById('inp-title').value.trim();
     if (!title) { document.getElementById('inp-title').focus(); return; }
     const reminder = document.getElementById('inp-reminder').value;
-    if (reminder !== 'none' && !(await askNotif())) {
-      document.getElementById('inp-reminder').value = 'none';
+    if (reminder !== 'none') {
+      if (!(await askNotif())) {
+        document.getElementById('inp-reminder').value = 'none';
+      } else if (!pushSubscription) {
+        // Permission may have just been granted — subscribe now so registerReminder works
+        await initPush();
+      }
     }
 
     const wasEditing = editingId;
