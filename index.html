@@ -477,11 +477,16 @@
 </div>
 
 <script>
+  // ── Web Push config ────────────────────────────────────────────────
+  const VAPID_PUBLIC_KEY = 'BGBXCVQaqUnUxz3b_v5PNkelEfQlXGIf-UH4qwaC6jtkvaOm9Kvpq8LTvHjah1Jm_4pTVydoJbUJWOzeK-Z3bu4';
+  const WORKER_URL = 'https://task-reminders.je-task-worker.workers.dev';
+
   // ── State ──────────────────────────────────────────────────────────
   let tasks = JSON.parse(localStorage.getItem('tasks') || '[]');
   let trash = JSON.parse(localStorage.getItem('trash') || '[]');
   let filter = 'all';
   let editingId = null;
+  let pushSubscription = null;
   const pendingDone = new Set(); // IDs of tasks just marked done, animating out
   const firedReminders = new Set(JSON.parse(localStorage.getItem('firedReminders') || '[]'));
 
@@ -574,6 +579,60 @@
     checkReminders(24 * 60 * 60 * 1000);
     // Poll every 30 seconds while app is open
     window._remInterval = setInterval(() => checkReminders(35000), 30000);
+  }
+
+  // ── Web Push ───────────────────────────────────────────────────────
+  function urlB64ToUint8Array(b64) {
+    const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+    const raw = atob(b64.replace(/-/g, '+').replace(/_/g, '/') + pad);
+    return Uint8Array.from(raw, c => c.charCodeAt(0));
+  }
+
+  async function initPush() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      pushSubscription = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlB64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+    } catch (err) {
+      console.warn('Push subscription failed:', err);
+    }
+  }
+
+  async function registerReminder(task) {
+    if (!pushSubscription) return;
+    const ms = reminderMs(task);
+    if (!ms) return;
+    try {
+      await fetch(`${WORKER_URL}/subscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subscription: pushSubscription.toJSON(),
+          taskId: task.id,
+          taskTitle: task.title,
+          reminderMs: ms,
+        }),
+      });
+    } catch (err) {
+      console.warn('Failed to register reminder with Worker:', err);
+    }
+  }
+
+  async function cancelReminder(taskId) {
+    if (!pushSubscription) return;
+    try {
+      await fetch(`${WORKER_URL}/reminder`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId }),
+      });
+    } catch (err) {
+      console.warn('Failed to cancel reminder with Worker:', err);
+    }
   }
 
   // ── Render ─────────────────────────────────────────────────────────
@@ -800,6 +859,7 @@
     t.deletedAt = Date.now();
     trash.unshift(t);
     save(); render();
+    cancelReminder(id);
   }
 
   function restore(id) {
@@ -862,6 +922,9 @@
       document.getElementById('inp-reminder').value = 'none';
     }
 
+    const wasEditing = editingId;
+    let savedTask = null;
+
     if (editingId) {
       const t = tasks.find(t => t.id === editingId);
       if (t) {
@@ -871,9 +934,10 @@
         t.due      = document.getElementById('inp-due').value  || null;
         t.dueTime  = document.getElementById('inp-time').value || null;
         t.reminder = document.getElementById('inp-reminder').value;
+        savedTask = t;
       }
     } else {
-      tasks.unshift({
+      savedTask = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2),
         title,
         priority: document.getElementById('inp-priority').value,
@@ -883,9 +947,18 @@
         reminder: document.getElementById('inp-reminder').value,
         done: false,
         created: Date.now(),
-      });
+      };
+      tasks.unshift(savedTask);
     }
     save(); render(); closeSheet();
+
+    if (savedTask) {
+      if (savedTask.reminder && savedTask.reminder !== 'none') {
+        registerReminder(savedTask);
+      } else if (wasEditing) {
+        cancelReminder(savedTask.id);
+      }
+    }
   }
 
   // ── Wire-up ────────────────────────────────────────────────────────
@@ -921,6 +994,7 @@
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
   render();
   scheduleReminders();
+  initPush();
 </script>
 </body>
 </html>
