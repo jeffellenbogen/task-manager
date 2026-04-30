@@ -44,8 +44,10 @@ Secrets (`VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_SUBJECT`) are managed v
 
 - `worker/src/index.js` — `POST /subscribe` (store reminder in KV), `DELETE /reminder` (cancel), `OPTIONS` preflight, and `scheduled` cron handler. CORS allowed for `https://jeffellenbogen.github.io` and localhost.
 - `worker/src/push.js` — VAPID JWT signing (ES256) + RFC 8291 payload encryption (aes128gcm) using only the Web Crypto API; no npm runtime deps.
-- `worker/wrangler.jsonc` — Worker name `task-reminders`, KV binding `REMINDERS` (production + preview), cron `* * * * *`.
-- **Cron** — every minute, `handleScheduled` lists `reminder:*` keys, fires Web Push for due entries, deletes them (even on push failure, to avoid repeat fires).
+- `worker/wrangler.jsonc` — Worker name `task-reminders`, KV binding `REMINDERS` (production + preview), cron `*/2 * * * *`.
+- **Cron** — every 2 minutes, `handleScheduled` lists `reminder:*` keys, fires Web Push for due entries, deletes them (even on push failure, to avoid repeat fires).
+- **Cron frequency = 2 min, not 1 min** — Cloudflare KV's free tier caps `list` operations at 1,000/day. A 1-min cron does 1,440 lists/day and exceeds the quota; 2-min does 720/day. Reminders may fire up to ~2 min late as a result.
+- **`reminderMs` stored in KV metadata** — `handleScheduled` filters non-due entries via `list` metadata, avoiding an extra `get()` per key. The value itself still contains `reminderMs` for backward compatibility.
 
 ### Data Flow
 

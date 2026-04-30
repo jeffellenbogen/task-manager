@@ -37,7 +37,10 @@ async function handleRequest(request, env) {
     }
 
     const value = JSON.stringify({ subscription, taskTitle, reminderMs });
-    await env.REMINDERS.put(`reminder:${taskId}`, value);
+    // Metadata lets the cron filter due entries without an extra get() per key
+    await env.REMINDERS.put(`reminder:${taskId}`, value, {
+      metadata: { reminderMs },
+    });
 
     return new Response('OK', { status: 200, headers: corsHeaders(origin) });
   }
@@ -59,13 +62,14 @@ async function handleScheduled(env) {
   const now = Date.now();
   const { keys } = await env.REMINDERS.list({ prefix: 'reminder:' });
 
-  await Promise.all(keys.map(async ({ name }) => {
+  await Promise.all(keys.map(async ({ name, metadata }) => {
+    // Fast path: skip non-due entries via metadata, no get() needed
+    if (metadata?.reminderMs > now) return;
+
     const raw = await env.REMINDERS.get(name);
     if (!raw) return;
-
     const { subscription, taskTitle, reminderMs } = JSON.parse(raw);
-
-    if (reminderMs > now) return; // not yet due
+    if (reminderMs > now) return; // re-check for entries written before metadata
 
     // Due: send push and delete (delete even if push fails to avoid repeat fires)
     await env.REMINDERS.delete(name);

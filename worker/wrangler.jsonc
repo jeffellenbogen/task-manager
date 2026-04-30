@@ -12,7 +12,7 @@
 	},
 	"triggers": {
 		"crons": [
-			"* * * * *"
+			"*/2 * * * *"
 		]
 	},
 	"upload_source_maps": true,
