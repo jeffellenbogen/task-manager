@@ -366,19 +366,6 @@
     }
     .btn-primary:active { background: var(--accent-dim); }
 
-    .ios-reminder-note {
-      display: none;
-      font-size: 0.75rem;
-      color: var(--warn);
-      background: rgba(245,158,11,0.1);
-      border: 1px solid rgba(245,158,11,0.3);
-      border-radius: 6px;
-      padding: 7px 10px;
-      margin-top: 6px;
-      line-height: 1.4;
-    }
-    .ios-reminder-note.visible { display: block; }
-
     .missed-banner {
       display: none;
       background: var(--warn);
@@ -401,6 +388,7 @@
       <div class="stats">
         <div class="stat"><strong id="stat-done">0</strong> done</div>
         <div class="stat"><strong id="stat-left">0</strong> left</div>
+        <div class="stat" id="app-version">v1.0.1</div>
       </div>
     </div>
     <div class="filters" id="filters">
@@ -468,9 +456,6 @@
         <option value="1h">1 hour before</option>
         <option value="1d">1 day before</option>
       </select>
-      <div class="ios-reminder-note" id="ios-reminder-note">
-        iOS can only deliver reminders while this app is open. For background alerts, keep the app open near the reminder time.
-      </div>
     </div>
     <button class="btn-primary" id="btn-add">Add Task</button>
   </div>
@@ -537,9 +522,6 @@
       new Notification('Task Reminder', { body: task.title, icon: './icon-192.png', tag: task.id });
     }
   }
-
-  // Detect iOS Home Screen PWA — navigator.standalone is true only when launched from home screen
-  const isIOSPWA = /iphone|ipad|ipod/i.test(navigator.userAgent) && window.navigator.standalone === true;
 
   function checkReminders(missedWindowMs) {
     if (Notification.permission !== 'granted') return;
@@ -887,7 +869,6 @@
     document.getElementById('inp-due').value = '';
     document.getElementById('inp-time').value = '';
     document.getElementById('inp-reminder').value = 'none';
-    updateIOSReminderNote();
     document.getElementById('overlay').classList.add('open');
     setTimeout(() => document.getElementById('inp-title').focus(), 300);
   }
@@ -904,7 +885,6 @@
     document.getElementById('inp-due').value = t.due || '';
     document.getElementById('inp-time').value = t.dueTime || '';
     document.getElementById('inp-reminder').value = t.reminder || 'none';
-    updateIOSReminderNote();
     document.getElementById('overlay').classList.add('open');
     setTimeout(() => document.getElementById('inp-title').focus(), 300);
   }
@@ -981,15 +961,6 @@
     btn.classList.add('active');
     render();
   });
-
-  // Show iOS warning note when a reminder is selected on iOS PWA
-  function updateIOSReminderNote() {
-    const note = document.getElementById('ios-reminder-note');
-    if (!note || !isIOSPWA) return;
-    const val = document.getElementById('inp-reminder').value;
-    note.classList.toggle('visible', val !== 'none');
-  }
-  document.getElementById('inp-reminder').addEventListener('change', updateIOSReminderNote);
 
   // Re-check reminders whenever the user switches back to the app
   document.addEventListener('visibilitychange', () => {
