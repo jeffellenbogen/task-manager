@@ -1,4 +1,4 @@
-const CACHE = 'taskmanager-v4';
+const CACHE = 'taskmanager-v5';
 const ASSETS = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', e => {
@@ -16,6 +16,28 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   e.respondWith(
     caches.match(e.request).then(cached => cached || fetch(e.request))
+  );
+});
+
+self.addEventListener('push', e => {
+  let title = 'Task Reminder';
+  let body = 'You have a task reminder.';
+
+  if (e.data) {
+    try {
+      const data = e.data.json();
+      title = data.title || title;
+      body = data.body || body;
+    } catch (_) {}
+  }
+
+  e.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: './icon-192.png',
+      badge: './icon-192.png',
+      tag: 'push-reminder',
+    })
   );
 });
 
